@@ -102,8 +102,6 @@ import edu.umd.cs.findbugs.ba.npe.NullValueUnconditionalDeref;
 import edu.umd.cs.findbugs.ba.npe.ParameterNullnessPropertyDatabase;
 import edu.umd.cs.findbugs.ba.npe.PointerUsageRequiringNonNullValue;
 import edu.umd.cs.findbugs.ba.npe.RedundantBranch;
-import edu.umd.cs.findbugs.ba.npe.ReturnPathType;
-import edu.umd.cs.findbugs.ba.npe.ReturnPathTypeDataflow;
 import edu.umd.cs.findbugs.ba.npe.TypeQualifierNullnessAnnotationDatabase;
 import edu.umd.cs.findbugs.ba.npe.UsagesRequiringNonNullValues;
 import edu.umd.cs.findbugs.ba.type.TypeDataflow;
@@ -1613,7 +1611,8 @@ public class FindNullDeref implements Detector, UseAnnotationDatabase, NullDeref
 
         } else {
             for (Location loc : derefLocationSet) {
-                bugInstance.addSourceLine(classContext, method, loc).describe(getDescription(loc, refValue));
+                FindDerefHelper helper = new FindDerefHelper(classContext, method);
+                bugInstance.addSourceLine(classContext, method, loc).describe(helper.getDescription(loc, refValue, vnaDataflow));
             }
 
             if (sourceLocations == doomedLocations && assignedNullLocationSet.size() == 1) {
@@ -1652,7 +1651,8 @@ public class FindNullDeref implements Detector, UseAnnotationDatabase, NullDeref
                 }
             }
 
-            if (!isDoomed(loc)) {
+            FindDerefHelper helper = new FindDerefHelper(classContext, method);
+            if (!(helper.isDoomed(loc) || MARK_DOOMED)) {
                 allDerefsAtDoomedLocations = false;
             }
         }
@@ -1680,7 +1680,8 @@ public class FindNullDeref implements Detector, UseAnnotationDatabase, NullDeref
             propertySet.addProperty(NullDerefProperty.DEREFS_ARE_CLONED);
         }
 
-        addPropertiesForMethodContainingWarning(propertySet);
+        FindDerefHelper helper = new FindDerefHelper(classContext, method);
+        helper.addPropertiesForMethodContainingWarning(propertySet);
     }
 
     private boolean uniqueLocations(Collection<Location> derefLocationSet) {
@@ -1713,52 +1714,7 @@ public class FindNullDeref implements Detector, UseAnnotationDatabase, NullDeref
         return uniqueDereferenceLocations;
     }
 
-    private void addPropertiesForMethodContainingWarning(WarningPropertySet<WarningProperty> propertySet) {
-        XMethod xMethod = XFactory.createXMethod(classContext.getJavaClass(), method);
 
-        boolean uncallable = !AnalysisContext.currentXFactory().isCalledDirectlyOrIndirectly(xMethod) && xMethod.isPrivate();
-
-        if (uncallable) {
-            propertySet.addProperty(GeneralWarningProperty.IN_UNCALLABLE_METHOD);
-        }
-    }
-
-    private boolean isDoomed(Location loc) {
-        if (!MARK_DOOMED) {
-            return false;
-        }
-
-        ReturnPathTypeDataflow rptDataflow;
-        try {
-            rptDataflow = classContext.getReturnPathTypeDataflow(method);
-
-            ReturnPathType rpt = rptDataflow.getFactAtLocation(loc);
-
-            return !rpt.canReturnNormally();
-        } catch (CheckedAnalysisException e) {
-            AnalysisContext.logError("Error getting return path type", e);
-            return false;
-        }
-    }
-
-    String getDescription(Location loc, ValueNumber refValue) {
-        PointerUsageRequiringNonNullValue pu;
-        try {
-            UsagesRequiringNonNullValues usages = classContext.getUsagesRequiringNonNullValues(method);
-            pu = usages.get(loc, refValue, vnaDataflow);
-            if (pu == null) {
-                return "SOURCE_LINE_DEREF";
-            }
-            return pu.getDescription();
-        } catch (DataflowAnalysisException e) {
-            AnalysisContext.logError("Error getting UsagesRequiringNonNullValues for " + method, e);
-            return "SOURCE_LINE_DEREF";
-        } catch (CFGBuilderException e) {
-            AnalysisContext.logError("Error getting UsagesRequiringNonNullValues for " + method, e);
-            return "SOURCE_LINE_DEREF";
-        }
-
-    }
 
     boolean inExplicitCatchNullBlock(Location loc) {
         int pc = loc.getHandle().getPosition();
