@@ -19,73 +19,26 @@
 
 package edu.umd.cs.findbugs.detect;
 
-import java.util.BitSet;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.Set;
-import java.util.SortedSet;
-
-import javax.annotation.CheckForNull;
-import javax.annotation.Nonnull;
-
-import org.apache.bcel.classfile.JavaClass;
-import org.apache.bcel.classfile.LineNumberTable;
-import org.apache.bcel.classfile.Method;
-import org.apache.bcel.generic.ATHROW;
-import org.apache.bcel.generic.ConstantPoolGen;
-import org.apache.bcel.generic.FieldInstruction;
-import org.apache.bcel.generic.INVOKEDYNAMIC;
-import org.apache.bcel.generic.Instruction;
-import org.apache.bcel.generic.InstructionHandle;
-import org.apache.bcel.generic.InstructionTargeter;
-import org.apache.bcel.generic.InvokeInstruction;
-import org.apache.bcel.generic.MethodGen;
-import org.apache.bcel.generic.ReturnInstruction;
-
-import edu.umd.cs.findbugs.BugAccumulator;
-import edu.umd.cs.findbugs.BugAnnotation;
-import edu.umd.cs.findbugs.BugInstance;
-import edu.umd.cs.findbugs.BugReporter;
-import edu.umd.cs.findbugs.Detector;
-import edu.umd.cs.findbugs.FieldAnnotation;
-import edu.umd.cs.findbugs.FindBugsAnalysisFeatures;
-import edu.umd.cs.findbugs.LocalVariableAnnotation;
-import edu.umd.cs.findbugs.MethodAnnotation;
-import edu.umd.cs.findbugs.Priorities;
-import edu.umd.cs.findbugs.StringAnnotation;
-import edu.umd.cs.findbugs.SystemProperties;
-import edu.umd.cs.findbugs.UseAnnotationDatabase;
-import edu.umd.cs.findbugs.ba.AnalysisContext;
-import edu.umd.cs.findbugs.ba.BasicBlock;
-import edu.umd.cs.findbugs.ba.CFGBuilderException;
-import edu.umd.cs.findbugs.ba.ClassContext;
-import edu.umd.cs.findbugs.ba.DataflowAnalysisException;
-import edu.umd.cs.findbugs.ba.Location;
-import edu.umd.cs.findbugs.ba.MissingClassException;
-import edu.umd.cs.findbugs.ba.SignatureConverter;
-import edu.umd.cs.findbugs.ba.XFactory;
-import edu.umd.cs.findbugs.ba.XField;
-import edu.umd.cs.findbugs.ba.XMethod;
-import edu.umd.cs.findbugs.ba.npe.IsNullValue;
-import edu.umd.cs.findbugs.ba.npe.NullDerefAndRedundantComparisonCollector;
-import edu.umd.cs.findbugs.ba.npe.NullDerefAndRedundantComparisonFinder;
-import edu.umd.cs.findbugs.ba.npe.NullValueUnconditionalDeref;
-import edu.umd.cs.findbugs.ba.npe.PointerUsageRequiringNonNullValue;
-import edu.umd.cs.findbugs.ba.npe.RedundantBranch;
-import edu.umd.cs.findbugs.ba.npe.ReturnPathType;
-import edu.umd.cs.findbugs.ba.npe.ReturnPathTypeDataflow;
-import edu.umd.cs.findbugs.ba.npe.UsagesRequiringNonNullValues;
+import edu.umd.cs.findbugs.*;
+import edu.umd.cs.findbugs.ba.*;
+import edu.umd.cs.findbugs.ba.npe.*;
 import edu.umd.cs.findbugs.ba.vna.ValueNumber;
 import edu.umd.cs.findbugs.ba.vna.ValueNumberDataflow;
 import edu.umd.cs.findbugs.ba.vna.ValueNumberFrame;
 import edu.umd.cs.findbugs.ba.vna.ValueNumberSourceInfo;
-import edu.umd.cs.findbugs.classfile.CheckedAnalysisException;
 import edu.umd.cs.findbugs.props.GeneralWarningProperty;
 import edu.umd.cs.findbugs.props.WarningProperty;
 import edu.umd.cs.findbugs.props.WarningPropertySet;
 import edu.umd.cs.findbugs.props.WarningPropertyUtil;
 import edu.umd.cs.findbugs.visitclass.Util;
+import org.apache.bcel.classfile.JavaClass;
+import org.apache.bcel.classfile.LineNumberTable;
+import org.apache.bcel.classfile.Method;
+import org.apache.bcel.generic.*;
+
+import javax.annotation.CheckForNull;
+import javax.annotation.Nonnull;
+import java.util.*;
 
 /**
  * A Detector to find instructions where a NullPointerException might be raised.
@@ -238,8 +191,8 @@ public class NoiseNullDeref implements Detector, UseAnnotationDatabase, NullDere
 
     /**
      * @deprecated Use
-     *             {@link #foundNullDeref(Location,ValueNumber,IsNullValue,ValueNumberFrame,boolean)}
-     *             instead
+     * {@link #foundNullDeref(Location, ValueNumber, IsNullValue, ValueNumberFrame, boolean)}
+     * instead
      */
     @Override
     @Deprecated
@@ -365,7 +318,8 @@ public class NoiseNullDeref implements Detector, UseAnnotationDatabase, NullDere
                 derefOutsideCatchBlock = true;
             }
 
-            if (!isDoomed(loc)) {
+            FindDerefHelper helper = new FindDerefHelper(classContext, method);
+            if (!(helper.isDoomed(loc) || MARK_DOOMED)) {
                 allDerefsAtDoomedLocations = false;
             }
         }
@@ -388,7 +342,8 @@ public class NoiseNullDeref implements Detector, UseAnnotationDatabase, NullDere
             propertySet.addProperty(NullDerefProperty.DEREFS_ARE_CLONED);
         }
 
-        addPropertiesForMethodContainingWarning(propertySet);
+        FindDerefHelper helper = new FindDerefHelper(classContext, method);
+        helper.addPropertiesForMethodContainingWarning(propertySet);
     }
 
     private boolean uniqueLocations(Collection<Location> derefLocationSet) {
@@ -406,53 +361,6 @@ public class NoiseNullDeref implements Detector, UseAnnotationDatabase, NullDere
             }
         }
         return uniqueDereferenceLocations;
-    }
-
-    private void addPropertiesForMethodContainingWarning(WarningPropertySet<WarningProperty> propertySet) {
-        XMethod xMethod = XFactory.createXMethod(classContext.getJavaClass(), method);
-
-        boolean uncallable = !AnalysisContext.currentXFactory().isCalledDirectlyOrIndirectly(xMethod) && xMethod.isPrivate();
-
-        if (uncallable) {
-            propertySet.addProperty(GeneralWarningProperty.IN_UNCALLABLE_METHOD);
-        }
-    }
-
-    private boolean isDoomed(Location loc) {
-        if (!MARK_DOOMED) {
-            return false;
-        }
-
-        ReturnPathTypeDataflow rptDataflow;
-        try {
-            rptDataflow = classContext.getReturnPathTypeDataflow(method);
-
-            ReturnPathType rpt = rptDataflow.getFactAtLocation(loc);
-
-            return !rpt.canReturnNormally();
-        } catch (CheckedAnalysisException e) {
-            AnalysisContext.logError("Error getting return path type", e);
-            return false;
-        }
-    }
-
-    String getDescription(Location loc, ValueNumber refValue) {
-        PointerUsageRequiringNonNullValue pu;
-        try {
-            UsagesRequiringNonNullValues usages = classContext.getUsagesRequiringNonNullValues(method);
-            pu = usages.get(loc, refValue, vnaDataflow);
-            if (pu == null) {
-                return "SOURCE_LINE_DEREF";
-            }
-            return pu.getDescription();
-        } catch (DataflowAnalysisException e) {
-            AnalysisContext.logError("Error getting UsagesRequiringNonNullValues for " + method, e);
-            return "SOURCE_LINE_DEREF";
-        } catch (CFGBuilderException e) {
-            AnalysisContext.logError("Error getting UsagesRequiringNonNullValues for " + method, e);
-            return "SOURCE_LINE_DEREF";
-        }
-
     }
 
     boolean inCatchNullBlock(Location loc) {
