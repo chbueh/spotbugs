@@ -1,0 +1,13 @@
+exclude:
+- /spotbugs[-]annotations/.*
+- /test[-]harness[-]core/.*
+component_depth: 1
+languages:
+- name: java
+  test:
+    include:
+    - /spotbugs[-]tests/.*[.]java
+    - /spotbugsTestCases/.*[.]java
+    - /eclipsePlugin[-]test/.*[.]java
+    - /eclipsePlugin[-]junit/.*[.]java
+    - .*/src/test/.*[.]java
