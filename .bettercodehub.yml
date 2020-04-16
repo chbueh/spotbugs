@@ -4,6 +4,7 @@ exclude:
 component_depth: 1
 languages:
 - name: java
+  production:
   test:
     include:
     - /spotbugs[-]tests/.*[.]java
